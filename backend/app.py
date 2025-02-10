@@ -67,6 +67,7 @@ async def create_chatbot(request: Request):
 
     chatbots_collection.insert_one(chatbot_data)
 
+    # give JS script to user
     embed_code = f"""
     <script>
         window.chtlConfig = {{ chatbotId: '{chatbot_id}' }};
