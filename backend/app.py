@@ -40,34 +40,51 @@ app.add_middleware(
 )
 
 
-# Create chatbot
-@app.post("/chatbots")
-async def create_chatbot(request: Request):
+# Generate URLs
+@app.post("/generate-urls")
+async def generate_urls(request: Request):
     body = await request.json()
     domain = body.get("domain")
 
     if not domain:
         raise HTTPException(status_code=400, detail="Domain is required")
 
-    chatbot_id = str(uuid.uuid4().int)[:10]
-
-    # Scrape website data
     scraper = Scraplib(domain)
     urls = scraper.urls_sitemap()
+    return {"urls": urls}
+
+
+# Scrape Data and Create Chatbot
+@app.post("/scrape-data")
+async def scrape_data(request: Request):
+    body = await request.json()
+    domain = body.get("domain")
+    urls = body.get("urls")
+
+    if not domain or not urls:
+        raise HTTPException(
+            status_code=400, detail="Domain and URLs are required")
+
+    chatbot_id = str(uuid.uuid4().int)[:10]
+
+    # Save URLs to a file
+    scraper = Scraplib(domain)
     scraper.save_urls_to_file(urls, f"{chatbot_id}_urls.txt")
+
+    # Scrape data from URLs
     data = scraper.scrap_all_pages(f"{chatbot_id}_urls.txt")
     scraper.save_data_to_file(data, f"{chatbot_id}_data.txt")
 
+    # Save chatbot data to MongoDB
     chatbot_data = {
         "chatbot_id": chatbot_id,
         "domain": domain,
         "scraped_data_file": f"static/{chatbot_id}_data.txt",
         "created_at": datetime.now(timezone.utc)
     }
-
     chatbots_collection.insert_one(chatbot_data)
 
-    # give JS script to user
+    # Generate embed code
     embed_code = f"""
     <script>
         window.chtlConfig = {{ chatbotId: '{chatbot_id}' }};
