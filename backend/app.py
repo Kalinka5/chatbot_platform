@@ -3,13 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from openai import OpenAI
 
-from pymongo.mongo_client import MongoClient
-from pymongo.server_api import ServerApi
 from datetime import timezone, datetime
 
 import os
 import uuid
 from dotenv import load_dotenv
+
+import mysql.connector
 
 from utils.open_ai import openai_answer
 from utils.scraplib import Scraplib
@@ -17,14 +17,20 @@ from config import get_chats, add_message, delete_all_chats, delete_chat
 from schemas import Message
 
 load_dotenv()
-uri = os.getenv('MONGODB_URI')
+mysql_config = {
+    'host': os.getenv('MYSQL_HOST'),
+    'user': os.getenv('MYSQL_USER'),
+    'password': os.getenv('MYSQL_PASSWORD'),
+    'database': os.getenv('MYSQL_DATABASE')
+}
 
-# Initialize MongoDB client
-db_client = MongoClient(uri, server_api=ServerApi('1'))
-db = db_client["chatbot_db"]
-chatbots_collection = db["chatbots"]
+
+# Establish MySQL connection
+def get_mysql_connection():
+    return mysql.connector.connect(**mysql_config)
 
 # deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
+
 
 # client = OpenAI(api_key=deepseek_api_key, base_url="https://api.deepseek.com")
 client = OpenAI()  # For gpt-4o-mini
@@ -75,14 +81,21 @@ async def scrape_data(request: Request):
     data = scraper.scrap_all_pages(f"{chatbot_id}_urls.txt")
     scraper.save_data_to_file(data, f"{chatbot_id}_data.txt")
 
-    # Save chatbot data to MongoDB
-    chatbot_data = {
-        "chatbot_id": chatbot_id,
-        "domain": domain,
-        "scraped_data_file": f"static/{chatbot_id}_data.txt",
-        "created_at": datetime.now(timezone.utc)
-    }
-    chatbots_collection.insert_one(chatbot_data)
+    # Save chatbot data to MySQL
+    connection = get_mysql_connection()
+    cursor = connection.cursor()
+
+    try:
+        query = """
+        INSERT INTO chatbots (chatbot_id, domain, scraped_data_file, created_at)
+        VALUES (%s, %s, %s, %s)
+        """
+        cursor.execute(query, (chatbot_id, domain,
+                       f"static/{chatbot_id}_data.txt", datetime.now(timezone.utc)))
+        connection.commit()
+    finally:
+        cursor.close()
+        connection.close()
 
     # Generate embed code
     embed_code = f"""
@@ -98,19 +111,39 @@ async def scrape_data(request: Request):
 # Get chatbot info
 @app.get("/chatbots/{chatbot_id}")
 async def get_chatbot(chatbot_id: str):
-    chatbot = chatbots_collection.find_one({"chatbot_id": chatbot_id})
-    if not chatbot:
-        raise HTTPException(status_code=404, detail="Chatbot not found")
-    return chatbot
+    connection = get_mysql_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    try:
+        query = "SELECT * FROM chatbots WHERE chatbot_id = %s"
+        cursor.execute(query, (chatbot_id,))
+        chatbot = cursor.fetchone()
+
+        if not chatbot:
+            raise HTTPException(status_code=404, detail="Chatbot not found")
+        return chatbot
+    finally:
+        cursor.close()
+        connection.close()
 
 
 # Delete chatbot
 @app.delete("/chatbots/{chatbot_id}")
 async def delete_chatbot(chatbot_id: str):
-    result = chatbots_collection.delete_one({"chatbot_id": chatbot_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Chatbot not found")
-    return {"detail": "Chatbot deleted successfully"}
+    connection = get_mysql_connection()
+    cursor = connection.cursor()
+
+    try:
+        query = "DELETE FROM chatbots WHERE chatbot_id = %s"
+        cursor.execute(query, (chatbot_id,))
+        connection.commit()
+
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Chatbot not found")
+        return {"detail": "Chatbot deleted successfully"}
+    finally:
+        cursor.close()
+        connection.close()
 
 
 # Predict response based on chatbot data
@@ -120,21 +153,30 @@ async def predict(chatbot_id: str, request: Request):
     user_question = body.get('message', '')
     user_datetime = body.get('datetime', '')
 
-    chatbot = chatbots_collection.find_one({"chatbot_id": chatbot_id})
-    if not chatbot:
-        raise HTTPException(status_code=404, detail="Chatbot not found")
+    connection = get_mysql_connection()
+    cursor = connection.cursor(dictionary=True)
 
-    data_file = chatbot["scraped_data_file"]
+    try:
+        query = "SELECT * FROM chatbots WHERE chatbot_id = %s"
+        cursor.execute(query, (chatbot_id,))
+        chatbot = cursor.fetchone()
 
-    response_message = openai_answer(
-        client, data_file, user_question, user_datetime
-    )
+        if not chatbot:
+            raise HTTPException(status_code=404, detail="Chatbot not found")
 
-    if response_message:
-        return {"response": response_message}
-    else:
-        raise HTTPException(
-            status_code=500, detail="Something went wrong. Please write another question.")
+        data_file = chatbot["scraped_data_file"]
+
+        response_message = openai_answer(
+            client, data_file, user_question, user_datetime)
+
+        if response_message:
+            return {"response": response_message}
+        else:
+            raise HTTPException(
+                status_code=500, detail="Something went wrong. Please write another question.")
+    finally:
+        cursor.close()
+        connection.close()
 
 # @app.post("/predict/{assistant_id}")
 # async def predict(assistant_id: str, request: Request):
