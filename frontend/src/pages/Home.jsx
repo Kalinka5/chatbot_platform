@@ -9,11 +9,13 @@ const Home = () => {
   const [error, setError] = useState("");
   const navigate = useNavigate();
 
+  const apiUrl = import.meta.env.VITE_API_URL;
+
   const handleDomainSubmit = async (domain) => {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("http://127.0.0.1:8000/generate-urls", {
+      const response = await fetch(`${apiUrl}/generate-urls`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -8,11 +8,13 @@ const UrlsPage = () => {
   const [error, setError] = useState("");
   const navigate = useNavigate();
 
+  const apiUrl = import.meta.env.VITE_API_URL;
+
   const handleScrapeData = async () => {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("http://127.0.0.1:8000/scrape-data", {
+      const response = await fetch(`${apiUrl}/scrape-data`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
